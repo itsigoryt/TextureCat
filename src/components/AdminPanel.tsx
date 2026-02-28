@@ -49,7 +49,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
   const [uploadProgress, setUploadProgress] = useState(0);
 
   const handleLogin = () => {
-    if (password === 'scolia2026') {
+    if (password === 'astrix2026') {
       setIsAuthenticated(true);
       setError('');
       loadProjects();
