@@ -513,10 +513,175 @@ function App() {
     }
   }, []);
 
+  const addNodeToTree = (tree: FileNode, parentPath: string, name: string, type: 'file' | 'folder'): FileNode => {
+    if (!tree.children) return tree;
+
+    const parts = parentPath.split('/').filter(p => p);
+
+    if (parts.length === 0 || (parts.length === 1 && parts[0] === 'root')) {
+      const newNode: FileNode = type === 'file'
+        ? { name, type: 'file', path: name }
+        : { name, type: 'folder', children: [] };
+
+      return {
+        ...tree,
+        children: [...tree.children, newNode]
+      };
+    }
+
+    return {
+      ...tree,
+      children: tree.children.map(child => {
+        if (child.name === parts[0] && child.type === 'folder') {
+          return addNodeToTree(child, parts.slice(1).join('/'), name, type);
+        }
+        return child;
+      })
+    };
+  };
+
+  const removeNodeFromTree = (tree: FileNode, targetPath: string): FileNode => {
+    if (!tree.children) return tree;
+
+    const parts = targetPath.split('/').filter(p => p);
+
+    if (parts.length === 1) {
+      return {
+        ...tree,
+        children: tree.children.filter(child => child.name !== parts[0])
+      };
+    }
+
+    return {
+      ...tree,
+      children: tree.children.map(child => {
+        if (child.name === parts[0] && child.type === 'folder') {
+          return removeNodeFromTree(child, parts.slice(1).join('/'));
+        }
+        return child;
+      })
+    };
+  };
+
+  const renameNodeInTree = (tree: FileNode, oldPath: string, newPath: string): FileNode => {
+    if (!tree.children) return tree;
+
+    const oldParts = oldPath.split('/').filter(p => p);
+    const newName = newPath.split('/').pop() || '';
+
+    if (oldParts.length === 1) {
+      return {
+        ...tree,
+        children: tree.children.map(child => {
+          if (child.name === oldParts[0]) {
+            return { ...child, name: newName, path: child.type === 'file' ? newPath : undefined };
+          }
+          return child;
+        })
+      };
+    }
+
+    return {
+      ...tree,
+      children: tree.children.map(child => {
+        if (child.name === oldParts[0] && child.type === 'folder') {
+          return renameNodeInTree(child, oldParts.slice(1).join('/'), newPath);
+        }
+        return child;
+      })
+    };
+  };
+
+  const handleCreateFile = useCallback((parentPath: string, fileName: string) => {
+    if (!fileTree) return;
+
+    const filePath = parentPath === 'root' ? fileName : `${parentPath}/${fileName}`;
+
+    if (fileContents.has(filePath)) {
+      alert('File already exists!');
+      return;
+    }
+
+    const newTree = addNodeToTree(fileTree, parentPath, fileName, 'file');
+    setFileTree(newTree);
+    setFileContents(prev => {
+      const newContents = new Map(prev);
+      newContents.set(filePath, '');
+      return newContents;
+    });
+  }, [fileTree, fileContents]);
+
+  const handleCreateFolder = useCallback((parentPath: string, folderName: string) => {
+    if (!fileTree) return;
+
+    const newTree = addNodeToTree(fileTree, parentPath, folderName, 'folder');
+    setFileTree(newTree);
+  }, [fileTree]);
+
+  const handleRenameFile = useCallback((oldPath: string, newPath: string) => {
+    if (!fileTree) return;
+
+    const content = fileContents.get(oldPath);
+    if (content === undefined) return;
+
+    const newTree = renameNodeInTree(fileTree, oldPath, newPath);
+    setFileTree(newTree);
+
+    setFileContents(prev => {
+      const newContents = new Map(prev);
+      newContents.delete(oldPath);
+      newContents.set(newPath, content);
+      return newContents;
+    });
+
+    if (currentFile === oldPath) {
+      setCurrentFile(newPath);
+    }
+  }, [fileTree, fileContents, currentFile]);
+
+  const handleDeleteFile = useCallback((path: string) => {
+    if (!fileTree) return;
+
+    const newTree = removeNodeFromTree(fileTree, path);
+    setFileTree(newTree);
+
+    setFileContents(prev => {
+      const newContents = new Map(prev);
+      newContents.delete(path);
+      return newContents;
+    });
+
+    if (currentFile === path) {
+      setCurrentFile(null);
+    }
+  }, [fileTree, currentFile]);
+
+  const handleDeleteFolder = useCallback((path: string) => {
+    if (!fileTree) return;
+
+    const newTree = removeNodeFromTree(fileTree, path);
+    setFileTree(newTree);
+
+    setFileContents(prev => {
+      const newContents = new Map(prev);
+      const pathPrefix = path + '/';
+      for (const key of newContents.keys()) {
+        if (key.startsWith(pathPrefix)) {
+          newContents.delete(key);
+        }
+      }
+      return newContents;
+    });
+
+    if (currentFile?.startsWith(path + '/')) {
+      setCurrentFile(null);
+    }
+  }, [fileTree, currentFile]);
+
   const currentContent = currentFile ? fileContents.get(currentFile) : null;
   const isPNG = currentFile?.match(/\.png$/i);
   const isAudio = currentFile?.match(/\.(ogg|mp3|wav)$/i);
-  const isJSON = currentFile?.match(/\.json$/i);
+  const isJSON = currentFile?.match(/\.(json|mcmeta)$/i);
   const isText = currentFile?.match(/\.(txt|md)$/i);
 
   if (showHomepage) {
@@ -567,6 +732,11 @@ function App() {
               tree={fileTree}
               onFileSelect={handleFileSelect}
               selectedFile={currentFile}
+              onCreateFile={handleCreateFile}
+              onCreateFolder={handleCreateFolder}
+              onRenameFile={handleRenameFile}
+              onDeleteFile={handleDeleteFile}
+              onDeleteFolder={handleDeleteFolder}
             />
           </div>
         )}
@@ -621,35 +791,51 @@ function App() {
               />
             )}
 
-            {currentFile && currentFile !== 'pack.mcmeta' && isPNG && currentContent instanceof Uint8Array && (
-              <PixelArtEditor
-                imageData={currentContent}
-                onSave={(data) => handleFileUpdate(currentFile, data)}
-                fileName={currentFile}
-              />
-            )}
+            {currentFile && currentFile !== 'pack.mcmeta' && fileTree && (
+              <>
+                {!currentContent && (
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-gray-400">File content not loaded</p>
+                  </div>
+                )}
 
-            {currentFile && currentFile !== 'pack.mcmeta' && isAudio && currentContent instanceof Uint8Array && (
-              <AudioPlayer
-                audioData={currentContent}
-                fileName={currentFile}
-              />
-            )}
+                {currentContent && isPNG && currentContent instanceof Uint8Array && (
+                  <PixelArtEditor
+                    imageData={currentContent}
+                    onSave={(data) => handleFileUpdate(currentFile, data)}
+                    fileName={currentFile}
+                  />
+                )}
 
-            {currentFile && currentFile !== 'pack.mcmeta' && isJSON && typeof currentContent === 'string' && (
-              <JsonEditor
-                content={currentContent}
-                onSave={(content) => handleFileUpdate(currentFile, content)}
-                fileName={currentFile}
-              />
-            )}
+                {currentContent && isAudio && currentContent instanceof Uint8Array && (
+                  <AudioPlayer
+                    audioData={currentContent}
+                    fileName={currentFile}
+                  />
+                )}
 
-            {currentFile && currentFile !== 'pack.mcmeta' && isText && typeof currentContent === 'string' && (
-              <TextEditor
-                content={currentContent}
-                onSave={(content) => handleFileUpdate(currentFile, content)}
-                fileName={currentFile}
-              />
+                {currentContent && isJSON && typeof currentContent === 'string' && (
+                  <JsonEditor
+                    content={currentContent}
+                    onSave={(content) => handleFileUpdate(currentFile, content)}
+                    fileName={currentFile}
+                  />
+                )}
+
+                {currentContent && isText && typeof currentContent === 'string' && (
+                  <TextEditor
+                    content={currentContent}
+                    onSave={(content) => handleFileUpdate(currentFile, content)}
+                    fileName={currentFile}
+                  />
+                )}
+
+                {currentContent && !isPNG && !isAudio && !isJSON && !isText && (
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-gray-400">Unsupported file type</p>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
